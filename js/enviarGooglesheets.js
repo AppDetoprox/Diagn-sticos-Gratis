@@ -1,45 +1,62 @@
-const scriptURL = 'https://script.google.com/macros/s/AKfycbyNx8mREFJ6ilD6Gdh5WuVuhQXKvcGCmtNlTZ5UDx0xgBGQuG-UJKVcsQRCWy5pivoXQA/exec'
+const scriptURL = 'https://script.google.com/macros/s/AKfycbyNx8mREFJ6ilD6Gdh5WuVuhQXKvcGCmtNlTZ5UDx0xgBGQuG-UJKVcsQRCWy5pivoXQA/exec';
 const form = document.getElementById('diag-form');
 const btn = document.getElementById('submit-btn');
 const mensaje = document.getElementById('mensaje-exito');
 
-form.addEventListener('submit', async (e) => { // Agregamos async aquí
+form.addEventListener('submit', async (e) => {
     e.preventDefault();
     
+    // Bloqueo de UI para evitar múltiples clics
     btn.disabled = true;
+    const originalBtnText = btn.innerText;
     btn.innerText = 'Enviando...';
 
-    // 1. Crear el objeto FormData con los datos del formulario
     const formData = new FormData(form);
 
+    // 1. Agregar Fecha y Hora local
+    const ahora = new Date();
+    formData.append('fecha_hora', ahora.toLocaleString('es-ES', {
+        dateStyle: 'short',
+        timeStyle: 'medium'
+    }));
+
     try {
-        // 2. Consultar la ubicación por IP (Gratis vía ipapi.co)
-        const responseIp = await fetch('https://ipapi.co/json/');
-        const dataIp = await responseIp.json();
+        // 2. Obtener País con Timeout (Evita que el formulario se quede "colgado" si la API de IP falla)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 segundos máximo
+
+        const responseIp = await fetch('https://ipapi.co/json/', { signal: controller.signal });
+        clearTimeout(timeoutId);
         
-        // 3. Añadir el país al envío (si falla la API, enviamos "Desconocido")
-        formData.append('pais', dataIp.country_name || 'Desconocido');
-        
+        if (responseIp.ok) {
+            const dataIp = await responseIp.json();
+            formData.append('pais', dataIp.country_name || 'Desconocido');
+        } else {
+            formData.append('pais', 'No detectado');
+        }
     } catch (error) {
-        console.error('No se pudo obtener la IP', error);
-        formData.append('pais', 'Error al obtener');
+        console.warn('Error al obtener IP o Timeout alcanzado:', error.message);
+        formData.append('pais', 'Error/Timeout');
     }
 
-    // 4. Enviar todo a tu destino (Google Sheets o n8n)
-    fetch(scriptURL, { 
-        method: 'POST', 
-        body: formData,
-        mode: 'no-cors' 
-    })
-    .then(() => {
+    // 3. Enviar a Google Sheets con manejo de errores real
+    try {
+        const response = await fetch(scriptURL, { 
+            method: 'POST', 
+            body: formData,
+            mode: 'no-cors' // Google Apps Script requiere no-cors para evitar errores de origen
+        });
+
+        // En modo 'no-cors' no podemos leer la respuesta, pero si no hay excepción, asumimos éxito
         form.reset();
         form.style.display = 'none';
         mensaje.style.display = 'block';
-    })
-    .catch(error => {
-        console.error('Error!', error.message);
-        alert('Hubo un error al enviar.');
+        console.log('Envío completado con éxito');
+
+    } catch (error) {
+        console.error('Error crítico en el envío:', error);
+        alert('Lo sentimos, hubo un problema técnico. Por favor, inténtalo de nuevo o contáctanos por WhatsApp.');
         btn.disabled = false;
-        btn.innerText = 'Quiero mi diagnóstico GRATIS';
-    });
+        btn.innerText = originalBtnText;
+    }
 });
